@@ -1,0 +1,218 @@
+---
+stages:
+- name: BUILD
+  inputs:
+  - url: https://github.com/moberlin8/orders-api-toolchain-demo-1488088084305.git
+    type: git
+    branch: master
+    dir_name: null
+  triggers:
+  - type: commit
+  properties:
+  - name: LOGICAL_APP_NAME
+    value: orders-api-toolchain-demo-1488088084305
+    type: text
+  - name: BUILD_PREFIX
+    value: master
+    type: text
+  jobs:
+  - name: Build
+    type: builder
+    artifact_dir: ''
+- name: DEV
+  inputs:
+  - type: job
+    stage: BUILD
+    job: Build
+    dir_name: null
+  triggers:
+  - type: stage
+  properties:
+  - name: CF_APP_NAME
+    value: undefined
+    type: text
+  - name: APP_URL
+    value: undefined
+    type: text
+  - name: LOGICAL_ENV_NAME
+    value: dev
+    type: text
+  - name: LOGICAL_APP_NAME
+    value: orders-api-toolchain-demo-1488088084305
+    type: text
+  - name: BUILD_PREFIX
+    value: master
+    type: text
+  jobs:
+  - name: Deploy
+    type: deployer
+    target:
+      region_id: ibm:yp:us-south
+      organization: mao@us.ibm.com
+      space: dev
+      application: orders-api-toolchain-demo-1488088084305
+    script: |-
+      #!/bin/bash
+      cf create-service cloudantNoSQLDB Lite myMicroservicesCloudant
+      # Push app
+      export CF_APP_NAME="dev-$CF_APP"
+      cf push "${CF_APP_NAME}"
+      # View logs
+      #cf logs "${CF_APP_NAME}" --recent
+- name: TEST
+  inputs:
+  - type: job
+    stage: BUILD
+    job: Build
+    dir_name: null
+  triggers:
+  - type: stage
+  properties:
+  - name: CF_APP_NAME
+    value: undefined
+    type: text
+  - name: APP_URL
+    value: undefined
+    type: text
+  - name: SAUCE_USERNAME
+    value: null
+    type: text
+  - name: SAUCE_ACCESS_KEY
+    value: null
+    type: text
+  - name: HOST
+    value: ondemand.saucelabs.com
+    type: text
+  - name: PORT
+    value: '80'
+    type: text
+  - name: LOGICAL_APP_NAME
+    value: orders-api-toolchain-demo-1488088084305
+    type: text
+  - name: BUILD_PREFIX
+    value: master
+    type: text
+  - name: LOGICAL_ENV_NAME
+    value: STAGING
+    type: text
+  jobs:
+  - name: Deploy
+    type: deployer
+    target:
+      region_id: ibm:yp:us-south
+      organization: mao@us.ibm.com
+      space: qa
+      application: orders-api-toolchain-demo-1488088084305
+    script: |-
+      #!/bin/bash
+      cf create-service cloudantNoSQLDB Lite myMicroservicesCloudant
+      # Push app
+      export CF_APP_NAME="test-$CF_APP"
+      cf push "${CF_APP_NAME}"
+      # View logs
+      #cf logs "${CF_APP_NAME}" --recent
+  - name: Sauce Labs Tests
+    type: tester
+    enable_tests: true
+    test_file_pattern: '*.xml'
+    extension_id: ibm.devops.services.pipeline.saucelabs
+    target:
+      url: https://api.ng.bluemix.net
+      organization: mao@us.ibm.com
+      space: qa
+    DL_ASSETS: 'false'
+    COMMAND: |-
+      #!/bin/bash
+      GRUNTFILE="tests/Gruntfile.js"
+      if [ -f $GRUNTFILE ]; then
+        npm install
+        echo $APP_URL | grep "stage1"
+        if [ $? -eq 0 ]; then
+          grunt test_fake --gruntfile $GRUNTFILE --base .
+        else
+          grunt test_real --gruntfile $GRUNTFILE --base .
+        fi
+      else
+        echo "$GRUNTFILE not found."
+      fi
+    SELECT_CMD: custom
+  - name: Functional Tests
+    type: tester
+    extension_id: ibm.devops.services.pipeline.dra_upload_results
+    ADDITIONAL_LIFE_CYCLE_STAGE_SELECT: none
+    COMMAND: |-
+      #!/bin/bash
+      GRUNTFILE="tests/Gruntfile.js"
+      if [ -f $GRUNTFILE ]; then
+        npm install
+        echo $APP_URL | grep "stage1"
+        if [ $? -eq 0 ]; then
+          grunt test_fake --gruntfile $GRUNTFILE --base .
+        else
+          grunt test_real --gruntfile $GRUNTFILE --base .
+        fi
+      else
+        echo "$GRUNTFILE not found."
+      fi
+    LIFE_CYCLE_STAGE_SELECT: fvt
+    LOG_FILE: ./xunit.xml
+- name: PROD
+  inputs:
+  - type: job
+    stage: BUILD
+    job: Build
+    dir_name: null
+  triggers:
+  - type: stage
+  properties:
+  - name: CF_APP_NAME
+    value: undefined
+    type: text
+  - name: APP_URL
+    value: undefined
+    type: text
+  - name: BUILD_PREFIX
+    value: master
+    type: text
+  - name: LOGICAL_APP_NAME
+    value: orders-api-toolchain-demo-1488088084305
+    type: text
+  - name: LOGICAL_ENV_NAME
+    value: PRODUCTION
+    type: text
+  jobs:
+  - name: Blue/Green Deploy
+    type: deployer
+    target:
+      region_id: ibm:yp:us-south
+      organization: mao@us.ibm.com
+      space: prod
+      application: orders-api-toolchain-demo-1488088084305
+    script: |-
+      #!/bin/bash
+      cf create-service cloudantNoSQLDB Lite myMicroservicesCloudant
+      if ! cf app $CF_APP; then
+        cf push $CF_APP
+      else
+        OLD_CF_APP=${CF_APP}-OLD-$(date +"%s")
+        rollback() {
+          set +e
+          if cf app $OLD_CF_APP; then
+            cf logs $CF_APP --recent
+            cf delete $CF_APP -f
+            cf rename $OLD_CF_APP $CF_APP
+          fi
+          exit 1
+        }
+        set -e
+        trap rollback ERR
+        cf rename $CF_APP $OLD_CF_APP
+        cf push $CF_APP
+        cf delete $OLD_CF_APP -f
+      fi
+hooks:
+- enabled: true
+  label: null
+  ssl_enabled: false
+  url: https://devops-api.ng.bluemix.net/v1/messaging/webhook/publish
+
